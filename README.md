@@ -52,8 +52,39 @@ searching on lots of requests.
 
 Inspired entirely by Flask.
 
+Usage (v0.2)
+-------------
 
-Requirements
+    require '../ham/ham.php';
+
+    route('/<string>', 'hello');
+    route('/blog/<int>/', 'BlogView', array('get', 'post'));
+    run();
+    
+    function hello($username='')
+    {
+        echo 'Hello ' . $username;
+    }
+
+    class BlogView extends View
+    {
+         public $blogs;
+
+         public function prepare()
+         {
+             $this->blogs = array();
+         }
+
+         public function get($id=0)
+         {
+             $blog = isset($this->blogs[$id]) ? $this->blogs[$id] : null;
+             return $blog;
+         }
+    }
+
+
+
+Requirements (v0.1)
 ------------
 
 * PHP 5.3
@@ -62,7 +93,7 @@ Requirements
   index.php).
 
 
-Hello World
+Hello World (v0.1)
 -----------
 
     require '../ham/ham.php';
@@ -76,7 +107,7 @@ Hello World
     $app->run();
 
 
-More Interesting Example
+More Interesting Example (v0.1)
 ------------------------
 
     require '../ham/ham.php';
@@ -99,7 +130,7 @@ More Interesting Example
     $app->run();
 
 
-Multiple apps mounted on routes!
+Multiple apps mounted on routes! (v0.1)
 --------------------------------
 
     require '../ham/ham.php';

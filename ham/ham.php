@@ -1,211 +1,236 @@
 <?php
-defined('APP_URI') or define('APP_URI', '');
+/**
+ * @author  James Cleveland <jc@blackflags.co.uk>  Ryan Liu <azhai@126.com>
+ * @version 0.2
+ *
+ * 简化自James Cleveland的Ham
+ *
+ * Usage:
+ * route('/<int>', 'BlogView', array('get', 'post'));
+ * run();
+ *
+ * class BlogView extends View
+ * {
+ *      public $blogs;
+ *
+ *      public function prepare()
+ *      {
+ *          $this->blogs = array();
+ *      }
+ *
+ *      public function get($id=0)
+ *      {
+ *          $blog = isset($this->blogs[$id]) ? $this->blogs[$id] : null;
+ *          return $blog;
+ *      }
+ *
+ * }
+ */
 
 
-class HamRouter 
+/*路由设置*/
+function route($url, $handler, $methods=null)
 {
-    public $register;
-    public $routes;
-    public $name;
-    public $cache;
-    public $parent;
-    public $prefix;
-
-    /**
-     * Create a Ham application.
-     * @param string $name a canonical name for this app. Must not be shared between apps or cache collisions will happen. Unless you want that.
-     * @param mixed $cache
-     * @param bool $log
-     */
-    public function __construct($name='default', $cache=False) 
-    {
-        $this->name = $name;
-        if($cache === False) {
-            $cache = static::create_cache($this->name);
-        }
-        $this->cache = $cache;
+    $router = Router::$current_router;
+    if (is_null($router)) {
+        $router = Router::detect();
     }
+    $router->add($url, $handler, $methods);
+}
 
-    /**
-     * Add routes
-     * @param $uri
-     * @param $callback
-     * @param array $request_methods
-     * @return bool
-     */
-    public function route($uri, $callback, $request_methods=array('GET')) 
-    {
-        if($this === $callback) {
-            return False;
+
+/*页面跳转*/
+function redirect($url, $code=301)
+{
+    if ($code == 301) { //永久跳转
+        if (true) { //TODO:网站内部跳转
+            return run(null, $url);
         }
-        $wildcard = False;
-        if($callback instanceof Ham) {
-            $callback->prefix = $uri;
-            $wildcard = True;
+        @header('HTTP/1.1 301 Moved Permanently');
+    }
+    @header('Location: ' . $url);
+}
+
+
+/*发送HTTP错误*/
+function abort($code=500, $message='')
+{
+    if(php_sapi_name() != 'cli') {
+        //@header('Content-Type: application/xhtml+xml; charset=UTF-8');
+        @header("Status: {$code}", false, $code);
+    }
+    $response = "<h1>{$code}</h1><p>{$message}</p>";
+    die($response);
+}
+
+
+/*运行程序，分发路由，输出内容*/
+function run(Router $root=null, $url=false, $method=false)
+{
+    if (is_null($root)) {
+        $root = Router::detect();
+    }
+    if ($url === false) {
+        $url = $_SERVER['REQUEST_URI'];;
+    }
+    if ($method === false) {
+        $method = strtolower($_SERVER['REQUEST_METHOD']);
+    }
+    //找到URL对应的输出
+    $url_pics = parse_url(str_replace($root->prefix, '', $url));
+    $url = is_array($url_pics) ? $url_pics['path'] : '/';
+    $response = $root->match($url, $method);
+    if (! is_null($response)) {
+        die($response);
+    }
+    else {
+        abort(404);
+    }
+}
+
+
+/**
+ * 路由器
+ */
+class Router
+{
+    public static $route_types = array(
+        '<int>' => '([0-9\-]+)',
+        '<float>' => '([0-9\.\-]+)',
+        '<string>' => '([a-zA-Z0-9\-_]+)',
+        '<page>' => '([0-9]*)\/?([0-9]*)\/?',
+        '<path>' => '([a-zA-Z0-9\-_\/])',
+    );
+    public static $current_router = null;
+    protected static $modules = array();
+    protected $routes = array();
+    public $prefix = '';
+    public $filename = '';
+    
+    public static function detect($filename=false)
+    {
+        if ($filename === false) {
+            $filename = 'root';
         }
-
-        $this->routes[] = array(
-            'uri' => $uri,
-            'callback' => $callback,
-            'request_methods' => $request_methods,
-            'wildcard' => $wildcard
-        );
-
-        return true;
-    }
-
-    /**
-     * Calls route and outputs it to STDOUT
-     */
-    public function run() 
-    {
-        echo $this();
-    }
-
-    /**
-     * Invoke method allows the application to be mounted as a closure.
-     * @param mixed|bool $app parent application that can be referenced by $app->parent
-     * @return mixed|string
-     */
-    public function __invoke($app=False) 
-    {
-        $this->parent = $app;
-        return $this->_route($_SERVER['REQUEST_URI']);
-    }
-
-    /**
-     * Makes sure the routes are compiled then scans through them
-     * and calls whichever one is approprate.
-     */
-    protected function _route($request_uri) 
-    {
-        $uri = parse_url(str_replace(APP_URI, '', $request_uri));
-        $path = $uri['path'];
-        $_k = "found_uri:{$path}";
-        $found = $this->cache->get($_k);
-        if(!$found) {
-            $found = $this->_find_route($path);
-            $this->cache->set($_k, $found, 10);
+        if (! isset(self::$modules[$filename])) {
+            $router = new self();
+            $router->filename = $filename;
+            self::$modules[$filename] = $router;
         }
-        if(!$found) {
-            return static::abort(404);
-        }
-        $found['args'][0] = $this;
-        return call_user_func_array($found['callback'], $found['args']);
+        return self::$modules[$filename];
     }
-
-
-    protected function _find_route($path) 
+    
+    public function glob($directory)
     {
-        $compiled = $this->_get_compiled_routes();
-        foreach($compiled as $route) {
-            if(preg_match($route['compiled'], $path, $args)) {
-                $found = array(
-                    'callback' => $route['callback'],
-                    'args' => $args
-                );
-                return $found;
+        $files = glob(rtrim($directory, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . '*.php'));
+        foreach ($files as $filename) {
+            if (is_file($filename)) {
+                $prefix = '/' . basename($filename, '.php');
+                $module = self::detect($filename);
+                $this->addModule($prefix, $module);
             }
         }
-        return False;
+        self::$current_router = $this;
+        return $this;
     }
-
-    protected function _get_compiled_routes() 
+    
+    public static function compileUrl($url, $wildcard=false)
     {
-        $_k = 'compiled_routes';
-        $compiled = $this->cache->get($_k);
-        if($compiled)
-            return $compiled;
-
-        $compiled = array();
-        foreach($this->routes as $route) {
-            $route['compiled'] = $this->_compile_route($route['uri'], $route['wildcard']);
-            $compiled[] = $route;
+        $url = rtrim($url, '/');
+        $url = str_replace('/', '\/', preg_quote($url));
+        $keys = array_map('preg_quote', array_keys(self::$route_types));
+        $values = array_values(self::$route_types);
+        $url = str_replace($keys, $values, $url);
+        $wildcard = ($wildcard === false) ? '' : '(.*)?';
+        return '/^' . $url . '\/?' . $wildcard . '$/';
+    }
+    
+    public function addModule($prefix, $module)
+    {
+        if (isset($module)) {
+            $module->prefix = rtrim($prefix, '/');
+            $prefix = str_replace('/', '\/', preg_quote($prefix));
+            $route_key = '/^' . $prefix . '\/?(.*)?$/';
+            $this->routes[$route_key] = $module;
+            return $module;
         }
-        $this->cache->set($_k, $compiled);
-        return $compiled;
     }
 
-    /**
-     * Takes a route in simple syntax and makes it into a regular expression.
-     */
-    protected function _compile_route($uri, $wildcard) 
+    public function add($url, $handler, array $methods=null)
     {
-        $route = $this->_escape_route_uri(rtrim($uri, '/'));
-        $types = array(
-            '<int>' => '([0-9\-]+)',
-            '<float>' => '([0-9\.\-]+)',
-            '<string>' => '([a-zA-Z0-9\-_]+)',
-            '<path>' => '([a-zA-Z0-9\-_\/])'
-        );
-        foreach($types as $k => $v) {
-            $route =  str_replace(preg_quote($k), $v, $route);
+        if (is_null($methods)) {
+            if ($handler instanceof View) {
+                $methods = array_diff(get_class_methods($handler), array(
+                    '__construct', get_class($handler), 'prepare',
+                ));
+            }
+            else {
+                $methods = array('get', 'post', 'head');
+            }
         }
-        if($wildcard)
-            $wc = '(.*)?';
-        else
-            $wc = '';
-        $ret = '/^' . $this->_escape_route_uri($this->prefix) . $route . '\/?' . $wc . '$/';
-        return  $ret;
+        $methods = array_map('strtolower', $methods);
+        $route_key = self::compileUrl($url);
+        $this->routes[$route_key] = array($handler, $methods);
     }
 
-    protected function _escape_route_uri($uri) 
+    public function match($url, $method='get')
     {
-        return str_replace('/', '\/', preg_quote($uri));
+        foreach ($this->routes as $route_key => $route) {
+            if (preg_match($route_key, $url, $params) !== 1) {
+                continue;
+            }
+            if ($route instanceof self) {
+                return $this->matchRouter($route, $url, $method);
+            }
+            else {
+                list($handler, $methods) = $route;
+                if (is_null($methods) || in_array($method, $methods)) {
+                    if (is_subclass_of($handler, 'View')) {
+                        $handler = array($this->initView($handler), $method);
+                    }
+                    array_shift($params); //丢掉第一个元素，完整匹配的URL
+                    if (empty($params)) { //保留函数默认值
+                        return call_user_func($handler);
+                    }
+                    else {
+                        return call_user_func_array($handler, $params);
+                    }
+                }
+            }
+        }
     }
-
-    /**
-     * Cancel application
-     * @param $code
-     * @param string $message
-     * @return string
-     */
-    public static function abort($code, $message='') 
+    
+    protected function matchRouter($route, $url, $method)
     {
-        if(php_sapi_name() != 'cli')
-            header("Status: {$code}", False, $code);
-        return "<h1>{$code}</h1><p>{$message}</p>";
+        $inner_url = substr($url, strlen($route->prefix));
+        if ($inner_url !== false) {
+            self::$current_router = $route;
+            require_once $route->filename;
+            return $route->match($inner_url, $method);
+        }
     }
-
-    /**
-     * Cache factory, be it XCache or APC.
-     */
-    public static function create_cache($prefix, $dummy=False) 
+    
+    protected function initView($handler)
     {
-        return new Dummy($prefix);
+        if (! is_object($handler)) {
+            $handler = new $handler();
+        }
+        if (method_exists($handler, 'prepare')) {
+            $handler->prepare();
+        }
+        return $handler;
     }
 }
 
-class Dummy extends HamCache {
-    public function get($key) {
-        return False;
-    }
-    public function set($key, $value, $ttl=1) {
-        return False;
-    }
-    public function inc($key, $interval=1) {
-        return False;
-    }
-    public function dec($key, $interval=1) {
-        return False;
+
+/**
+ * 控制器
+ */
+class View
+{
+    public function prepare()
+    {
     }
 }
 
-abstract class HamCache {
-    public $prefix;
-
-    public function __construct($prefix=False) {
-        $this->prefix = $prefix;
-    }
-    protected function _p($key) {
-        if($this->prefix)
-            return $this->prefix . ':' . $key;
-        else
-            return $key;
-    }
-    abstract public function set($key, $value, $ttl=1);
-    abstract public function get($key);
-    abstract public function inc($key, $interval=1);
-    abstract public function dec($key, $interval=1);
-}
-
+?>
